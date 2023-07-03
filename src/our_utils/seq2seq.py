@@ -8,7 +8,7 @@ from transformers.trainer import PredictionOutput
 from transformers.tokenization_utils import PreTrainedTokenizer
 
 import evaluate
-blue = evaluate.load("bleu")
+bleu = evaluate.load("bleu")
 rouge = evaluate.load("rouge")  # TODO: decide which metrics to load
 
 
@@ -33,32 +33,29 @@ class ComputeMetrics:
         Uses the model predictions to compute metrics.
         """
         preds, labels = eval_preds
-        score_dict = {"rouge-1": [], "rouge-2": [], "rouge-l": [], "bleu-4": []}
+        # score_dict = {"rouge-1": [], "rouge-2": [], "rouge-l": [], "bleu-4": []}
+        # NOTE by zian: not tested
+        decoded_hyps = []
+        decoded_refs = []
 
-        # FIXME: implement correct evaluation with huggingface evaluate
+        for pred, label in zip(preds, labels):
+            pred_pad_len, label_pad_len = np.sum(pred == IGNORE_INDEX), np.sum(label == IGNORE_INDEX)
+            pred = pred[len(label) - label_pad_len : len(pred) - pred_pad_len] # remove prompts
+            label = label[:len(label) - label_pad_len]
 
-        # for pred, label in zip(preds, labels):
-        #     pred_pad_len, label_pad_len = np.sum(pred == IGNORE_INDEX), np.sum(label == IGNORE_INDEX)
-        #     pred = pred[len(label) - label_pad_len : len(pred) - pred_pad_len] # remove prompts
-        #     label = label[:len(label) - label_pad_len]
+            hypothesis = self.tokenizer.decode(pred, skip_special_tokens=True)
+            reference = self.tokenizer.decode(label, skip_special_tokens=True)
+        
+            decoded_hyps.append(hypothesis)
+            decoded_refs.append(reference)
+        
+        rouge_results = rouge.compute(predictions=decoded_hyps, references=decoded_refs)
+        bleu_results = bleu.compute(predictions=decoded_hyps, references=[[ref] for ref in decoded_refs])
 
-        #     hypothesis = list(jieba.cut(self.tokenizer.decode(pred, skip_special_tokens=True)))
-        #     reference = list(jieba.cut(self.tokenizer.decode(label, skip_special_tokens=True)))
+        score = rouge_results
+        score['bleu'] = bleu_results['bleu']
 
-        #     if len(" ".join(hypothesis).split()) == 0:
-        #         result = {"rouge-1": {"f": 0.0}, "rouge-2": {"f": 0.0}, "rouge-l": {"f": 0.0}}
-        #     else:
-        #         rouge = Rouge()
-        #         scores = rouge.get_scores(" ".join(hypothesis), " ".join(reference))
-        #         result = scores[0]
-
-        #     for k, v in result.items():
-        #         score_dict[k].append(round(v["f"] * 100, 4))
-
-        #     bleu_score = sentence_bleu([list(label)], list(pred), smoothing_function=SmoothingFunction().method3)
-        #     score_dict["bleu-4"].append(round(bleu_score * 100, 4))
-
-        return {k: float(np.mean(v)) for k, v in score_dict.items()}
+        return score
 
 
 class Seq2SeqPeftTrainer(PeftTrainer):
