@@ -114,13 +114,13 @@ class Template:
                 use_history=True
             )
         
-        elif self.name == "dcrn-seq2seq":
+        elif self.name == "dcrn-end2end":
             r"""
             Support the seq2seq paradigm of decompiled code renaming
             """
             self._register_template(
                 prefix="",
-                prompt="Decompiled code: {query}\n\nName list: ",
+                prompt="Decompiled C code: {query}\n\nRenamed variable list: ",
                 sep="\n\n",
                 use_history=False
             )

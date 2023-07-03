@@ -24,8 +24,12 @@ WANDB_DISABLED=true
 CUDA_VISIBLE_DEVICES=5 python src/train_dcrn.py \
     --model_name_or_path "huggyllama/llama-${model_size}" \
     --do_train \
-    --dataset gh-dataset-sample.jsonl \
+    --dataset gh-dataset-train.jsonl \
     --dataset_dir data/dcrn \
+    --max_source_length 1700 \
+    --max_target_length 200 \
+    --prompt_template dcrn-end2end \
+    --preprocessing_num_workers 4 \
     --finetuning_type lora \
     --output_dir "save/llama-${model_size}-qlora-let" \
     --quantization_bit 4 \

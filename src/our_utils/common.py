@@ -355,7 +355,6 @@ def prepare_data(
         model_args: ModelArguments,
         data_args: DataTrainingArguments
 ) -> Dataset:
-    # TODO: simple single dataset loading
 
     max_samples = data_args.max_samples
     data_path = os.path.join(data_args.dataset_dir, data_args.dataset)
@@ -366,7 +365,7 @@ def prepare_data(
         max_samples_temp = min(len(dataset), max_samples)
         dataset = dataset.select(range(max_samples_temp))
     
-    return dataset
+    return dataset['train']  # NOTE by zian: `load_dataset` will set the loaded dataset to train by default
 
 
 def preprocess_data(
@@ -374,7 +373,7 @@ def preprocess_data(
         tokenizer: PreTrainedTokenizer,
         data_args: DataTrainingArguments,
         training_args: Seq2SeqTrainingArguments,
-        stage: Literal["pt", "sft", "rm", "ppo"]
+        stage: Literal["pt", "sft", "rm", "ppo", "dcrn-e2e", "dcrn-it"]
 ) -> Dataset:
     """data_args will control how we preprocess the data (into what kind of task)"""
 
@@ -382,33 +381,65 @@ def preprocess_data(
     prompt_template = Template(data_args.prompt_template)
 
     # support question with a single answer or multiple answers
-    def get_dialog(examples):
-        for i in range(len(examples["prompt"])):
-            if examples["prompt"][i] and examples["response"][i]:
-                query, answer = examples["prompt"][i], examples["response"][i]
-                query = query + "\n" + examples["query"][i] if examples["query"][i] else query
-                prefix = examples["prefix"][i] if examples["prefix"][i] else ""
-                dialog = prompt_template.get_dialog(query, answer, examples["history"][i], prefix)
+    def get_dialog_dcrn(examples):
+        for i in range(len(examples["code"])):
+            if examples["code"] and examples["identifier_map"]:
+                query = examples["code"][i]
+                answer = repr(examples["identifier_map"][i])
+                prefix = ""
+                dialog = prompt_template.get_dialog(query, answer, None, prefix)
                 yield dialog
 
-    def preprocess_end2end_dataset(examples):\
-        # TODO: follow the convention in `preprocess_supervised_dataset`
+    def preprocess_end2end_dataset(examples):   # NOTE by zian: currently same as sft
+        # build inputs with format `<bos> X Y <eos>` and labels with format `<ignore> ... <ignore> Y <eos>`
+        # for input with history, we build multiple input-label pairs just like:
+        # https://github.com/lm-sys/FastChat/blob/f17c092f64840fa6354ed52789dccb2daa793d0b/fastchat/train/train.py#L112
         model_inputs = {"input_ids": [], "labels": []}
+        for dialog in get_dialog_dcrn(examples):
+            input_ids, labels = [], []
+
+            for i in range(len(dialog) // 2):
+                source_ids = tokenizer.encode(text=dialog[2*i], add_special_tokens=False)
+                target_ids = tokenizer.encode(text=dialog[2*i+1], add_special_tokens=False)
+
+                if len(source_ids) > data_args.max_source_length - 1: # bos token
+                    source_ids = source_ids[:data_args.max_source_length - 1]
+                if len(target_ids) > data_args.max_target_length - 1: # eos token
+                    target_ids = target_ids[:data_args.max_target_length - 1]
+            
+                input_ids += [tokenizer.bos_token_id] + source_ids + target_ids + [tokenizer.eos_token_id]
+                labels += [IGNORE_INDEX] * (len(source_ids) + 1) + target_ids + [tokenizer.eos_token_id]
+
+            if len(input_ids) > data_args.max_source_length + data_args.max_target_length:
+                input_ids = input_ids[:data_args.max_source_length + data_args.max_target_length]
+            if len(labels) > data_args.max_source_length + data_args.max_target_length:
+                labels = labels[:data_args.max_source_length + data_args.max_target_length]
+
+            model_inputs["input_ids"].append(input_ids)
+            model_inputs["labels"].append(labels)
+        return model_inputs
 
     def preprocess_instruction_tuning_dataset(examples):
         raise NotImplementedError
 
     def print_end2end_dataset_example(example):
-        # TODO: follow the convention in `print_supervised_dataset_example`
-        ...
+        print("input_ids:\n{}".format(example["input_ids"]))
+        print("inputs:\n{}".format(tokenizer.decode(example["input_ids"], skip_special_tokens=False)))
+        print("label_ids:\n{}".format(example["labels"]))
+        print("labels:\n{}".format(
+            tokenizer.decode([d if d != IGNORE_INDEX else tokenizer.pad_token_id for d in example["labels"]],
+                             skip_special_tokens=False)
+        ))
 
     def print_instruction_tuning_dataset(example):
         raise NotImplementedError
     
-    if stage == 'e2e':
+    if stage == 'dcrn-e2e':
         preprocess_function = preprocess_end2end_dataset
-    elif stage == 'it':
+    elif stage == 'dcrn-it':
         preprocess_function = preprocess_instruction_tuning_dataset
+    else:
+        raise NotImplementedError
     
     with training_args.main_process_first(desc="dataset map preprocessing"):
         dataset = dataset.map(
@@ -420,9 +451,11 @@ def preprocess_data(
             desc="Running tokenizer on dataset"
         )
 
-        if stage == 'e2e':
+        if stage == 'dcrn-e2e':
             print_end2end_dataset_example(dataset[0])
-        elif stage == 'it':
+        elif stage == 'dcrn-it':
             print_instruction_tuning_dataset(dataset[0])
+        else:
+            raise NotImplementedError
         
         return dataset
