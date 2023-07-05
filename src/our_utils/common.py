@@ -361,11 +361,13 @@ def prepare_data(
 
     dataset = load_dataset('json', data_files=data_path)
 
+    dataset = dataset['train']  # NOTE by zian: `load_dataset` will set the loaded dataset to train by default
+
     if max_samples is not None:
         max_samples_temp = min(len(dataset), max_samples)
         dataset = dataset.select(range(max_samples_temp))
     
-    return dataset['train']  # NOTE by zian: `load_dataset` will set the loaded dataset to train by default
+    return dataset
 
 
 def preprocess_data(
@@ -418,6 +420,30 @@ def preprocess_data(
             model_inputs["input_ids"].append(input_ids)
             model_inputs["labels"].append(labels)
         return model_inputs
+    
+    def preprocess_end2end_eval_dataset(examples):   # NOTE by zian: eval dataset format should be different
+        # build inputs with format `<bos> X Y <eos>` and labels with format `<ignore> ... <ignore> Y <eos>`
+        # for input with history, we build multiple input-label pairs just like:
+        # https://github.com/lm-sys/FastChat/blob/f17c092f64840fa6354ed52789dccb2daa793d0b/fastchat/train/train.py#L112
+        model_inputs = {"input_ids": [], "labels": []}
+        for dialog in get_dialog_dcrn(examples):
+            input_ids, labels = [], []
+
+            for i in range(len(dialog) // 2):
+                source_ids = tokenizer.encode(text=dialog[2*i], add_special_tokens=False)
+                target_ids = tokenizer.encode(text=dialog[2*i+1], add_special_tokens=False)
+
+                if len(source_ids) > data_args.max_source_length - 1: # bos token
+                    source_ids = source_ids[:data_args.max_source_length - 1]
+                if len(target_ids) > data_args.max_target_length - 1: # eos token
+                    target_ids = target_ids[:data_args.max_target_length - 1]
+            
+                input_ids += [tokenizer.bos_token_id] + source_ids
+                labels += target_ids + [tokenizer.eos_token_id]
+
+            model_inputs["input_ids"].append(input_ids)
+            model_inputs["labels"].append(labels)
+        return model_inputs
 
     def preprocess_instruction_tuning_dataset(examples):
         raise NotImplementedError
@@ -435,7 +461,12 @@ def preprocess_data(
         raise NotImplementedError
     
     if stage == 'dcrn-e2e':
-        preprocess_function = preprocess_end2end_dataset
+        if training_args.do_train:
+            preprocess_function = preprocess_end2end_dataset
+        elif training_args.do_eval or training_args.do_predict:
+            preprocess_function = preprocess_end2end_eval_dataset
+        else:
+            raise NotImplementedError
     elif stage == 'dcrn-it':
         preprocess_function = preprocess_instruction_tuning_dataset
     else:

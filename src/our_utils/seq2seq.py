@@ -41,7 +41,8 @@ class ComputeMetrics:
         for pred, label in zip(preds, labels):
             pred_pad_len, label_pad_len = np.sum(pred == IGNORE_INDEX), np.sum(label == IGNORE_INDEX)
             pred = pred[len(label) - label_pad_len : len(pred) - pred_pad_len] # remove prompts
-            label = label[:len(label) - label_pad_len]
+            # label = label[:len(label) - label_pad_len]
+            label = np.where(label==IGNORE_INDEX,0,label)
 
             hypothesis = self.tokenizer.decode(pred, skip_special_tokens=True)
             reference = self.tokenizer.decode(label, skip_special_tokens=True)
@@ -82,11 +83,13 @@ class Seq2SeqPeftTrainer(PeftTrainer):
             for pred, label in zip(predict_results.predictions, predict_results.label_ids):
                 pred_pad_len, label_pad_len = np.sum(pred == IGNORE_INDEX), np.sum(label == IGNORE_INDEX)
                 pred = pred[len(label) - label_pad_len : len(pred) - pred_pad_len] # remove prompts
-                label = label[:len(label) - label_pad_len]
+                # label = label[:len(label) - label_pad_len]
+                label = np.where(label==IGNORE_INDEX,0,label)
+
 
                 pred = self.tokenizer.decode(pred, skip_special_tokens=True)
                 label = self.tokenizer.decode(label, skip_special_tokens=True)
 
-                res.append(json.dumps({"label": label, "predict": pred}, ensure_ascii=False))
+                res.append(json.dumps({"label": label, "predict": pred}, ensure_ascii=False, indent=2))
 
             writer.write("\n".join(res))
